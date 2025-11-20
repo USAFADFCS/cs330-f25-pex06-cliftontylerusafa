@@ -6,6 +6,12 @@
 {- DOCUMENTATION: I sat down with Gavin Smith to go over the problem conceptually. 
 He didn't actually show me any code, only explained how he thought through recursively
 checking for wrap-around Type-II knots. I implemented some of that logic in my code.
+
+I also referred to the following documentation for writing my code:
+https://www.haskell.org/tutorial/patterns.html
+https://livebook.manning.com/book/get-programming-with-haskell/chapter-7
+https://hackage.haskell.org/package/base-4.21.0.0/docs/Data-Maybe.html
+https://zvon.org/other/haskell/Outputprelude/mod_f.html
 -}
 
 -- pex6main.hs
@@ -19,100 +25,110 @@ unKnot tripCode
 typeI :: [(Char,Char)] -> [(Char,Char)]
 typeI [] = []
 typeI [x] = [x]
-typeI (p1@(x1,t1) : p2@(x2,t2) : rest)
+typeI ((x1,t1):(x2,t2):rest)
     | x1 == x2  = typeI rest
-    | otherwise = p1 : typeI (p2 : rest)
-
--- safely get the last element and the list without it
-safeLastInit :: [a] -> Maybe (a, [a])
-safeLastInit [] = Nothing
-safeLastInit xs = Just (last xs, init xs)
+    | otherwise = (x1,t1) : typeI ((x2,t2):rest)
 
 -- Remove the first adjacent pair matching a given order and where types are equal
--- and differ from the head type. Skip any adjacent same-label pair, regardless of type.
+-- and differ from the head type. Skip any adjacent same-label pair.
 removeFirstAdjPair :: [(Char,Char)] -> (Char,Char) -> Char -> ([(Char,Char)], Bool)
 removeFirstAdjPair [] _ _ = ([], False)
 removeFirstAdjPair [x] _ _ = ([x], False)
-removeFirstAdjPair (p1@(x1,t1') : p2@(x2,t2') : rest) (o1,o2) tHead
-    -- Skip local Type-I blockers (same crossing adjacent), regardless of type
+removeFirstAdjPair ((x1,t1):(x2,t2):rest) ord tHead
     | x1 == x2 =
-        removeFirstAdjPair rest (o1,o2) tHead
-
-    -- Target adjacent pair must be in the specified order (SAME order),
-    -- same type as each other, and that type must differ from the head type.
-    | x1 == o1 && x2 == o2 && t1' == t2' && t1' /= tHead =
+        removeFirstAdjPair rest ord tHead
+    | x1 == fst ord && x2 == snd ord && t1 == t2 && t1 /= tHead =
         (rest, True)
+removeFirstAdjPair ((x1,t1):(x2,t2):rest) ord tHead =
+    letRes (removeFirstAdjPair ((x2,t2):rest) ord tHead) (x1,t1)
 
-    -- Continue scanning
-    | otherwise =
-        let (restRes, found) = removeFirstAdjPair (p2 : rest) (o1,o2) tHead
-        in (p1 : restRes, found)
+-- matches the pair result
+letRes :: ([(Char,Char)], Bool) -> (Char,Char) -> ([(Char,Char)], Bool)
+letRes (restRes, found) p = (p:restRes, found)
 
--- Try to find a Type-II starting at head of list
--- If found, remove head two and the matching adjacent end pair
+-- Extractors for the pair returned by removeFirstAdjPair
+removeFirstAdjPairBool :: ([(Char,Char)], Bool) -> Bool
+removeFirstAdjPairBool (_,b) = b
+
+removeFirstAdjPairOut :: ([(Char,Char)], Bool) -> [(Char,Char)]
+removeFirstAdjPairOut (l,_) = l
+
 findTypeIIAtHead :: [(Char,Char)] -> Maybe [(Char,Char)]
-findTypeIIAtHead (p1@(x1,t1) : p2@(x2,t2) : rest)
+findTypeIIAtHead ((x1,t1):(x2,t2):rest)
     | t1 /= t2 = Nothing
-    | otherwise =
-        let tailReduced = reduce rest
-            orderSame = (x1, x2)
-            orderRev  = (x2, x1)
-            (afterRemSame, removedSame) = removeFirstAdjPair(tailReduced) orderSame t1
-            (afterRemRev,  removedRev)  = removeFirstAdjPair(tailReduced) orderRev  t1
-        in if removedSame then Just afterRemSame
-           else if removedRev then Just afterRemRev
-           else Nothing
+    | removeFirstAdjPairBool (removeFirstAdjPair (reduce rest) (x1,x2) t1) =
+        Just (removeFirstAdjPairOut (removeFirstAdjPair (reduce rest) (x1,x2) t1))
+    | removeFirstAdjPairBool (removeFirstAdjPair (reduce rest) (x2,x1) t1) =
+        Just (removeFirstAdjPairOut (removeFirstAdjPair (reduce rest) (x2,x1) t1))
+    | otherwise = Nothing
 findTypeIIAtHead _ = Nothing
 
--- rotates list
-rotate :: [(a)] -> [(a)]
+-- Rotate list left by one
+rotate :: [a] -> [a]
 rotate [] = []
 rotate (h:t) = t ++ [h]
 
--- find length
+-- Length of a list
 listLen :: [a] -> Int
-listLen []     = 0
-listLen (_:t)  = 1 + listLen t
+listLen [] = 0
+listLen (_:t) = 1 + listLen t
 
--- rotate left n times
+-- Rotate left n times
 rotateTimes :: [a] -> Int -> [a]
 rotateTimes xs 0 = xs
 rotateTimes xs n = rotateTimes (rotate xs) (n - 1)
 
--- Try to find a Type-II anywhere by rotating.
--- When a match is found at rotation k
--- get a reduced list in that rotated frame and rotate it back to restore original orientation
+-- Compute back rotations based on length and rotation count
+backRotationsInt :: Int -> Int -> Int
+backRotationsInt m k =
+    if m == 0 then 0 else (m - (k `mod` m)) `mod` m
+
+-- Rotate back to original orientation after working in rotated frame
+rotateBack :: [(Char,Char)] -> Int -> [(Char,Char)]
+rotateBack xs k =
+    if listLen xs == 0
+    then xs
+    else rotateTimes xs (backRotationsInt (listLen xs) k)
+
+-- Fully reduce the list obtained at rotated frame, then rotate back
+fullyReduceAndRotateBack :: [(Char,Char)] -> Int -> [(Char,Char)]
+fullyReduceAndRotateBack reducedAtRotatedFrame k =
+    rotateBack (reduce reducedAtRotatedFrame) k
+
+fullyReduceAndRotateBackFromMaybe :: Maybe [(Char,Char)] -> Int -> [(Char,Char)]
+fullyReduceAndRotateBackFromMaybe (Just r) k = fullyReduceAndRotateBack r k
+fullyReduceAndRotateBackFromMaybe Nothing _ = []
+
+-- Try to find a Type-II anywhere by rotation
 findTypeII :: [(Char,Char)] -> Maybe [(Char,Char)]
 findTypeII trip = tryRotations trip trip 0
-  where
-    tryRotations :: [(Char,Char)] -> [(Char,Char)] -> Int -> Maybe [(Char,Char)]
-    tryRotations orig current k
-        | null current = Nothing
-        | k /= 0 && current == orig = Nothing
-        | otherwise =
-            case findTypeIIAtHead current of
-                Just reducedAtRotatedFrame ->
-                    let fullyReducedRotated = reduce reducedAtRotatedFrame
-                        m = listLen fullyReducedRotated
-                        backRotations = if m == 0 then 0 else (m - (k `mod` m)) `mod` m
-                        reducedInOrig = rotateTimes fullyReducedRotated backRotations
-                    in Just reducedInOrig
-                Nothing ->
-                    tryRotations orig (rotate current) (k + 1)
 
--- apply Type-I then Type-II
+tryRotations :: [(Char,Char)] -> [(Char,Char)] -> Int -> Maybe [(Char,Char)]
+tryRotations orig current k
+    | current == [] = Nothing
+    | k /= 0 && current == orig = Nothing
+    | findTypeIIAtHead current == Nothing =
+        tryRotations orig (rotate current) (k + 1)
+    | otherwise =
+        Just (fullyReduceAndRotateBackFromMaybe (findTypeIIAtHead current) k)
+
+-- Apply Type-I then Type-II
 reduceOnce :: [(Char,Char)] -> [(Char,Char)]
 reduceOnce trip =
-    let t1 = typeI trip
-    in case findTypeII t1 of
-         Just r -> r
-         Nothing -> t1
+    if findTypeII (typeI trip) == Nothing
+    then typeI trip
+    else reduceOnceFound (findTypeII (typeI trip))
+
+reduceOnceFound :: Maybe [(Char,Char)] -> [(Char,Char)]
+reduceOnceFound (Just r) = r
+reduceOnceFound Nothing  = typeI []
 
 -- Fully reduce by repeatedly applying reductions until no change
 reduce :: [(Char,Char)] -> [(Char,Char)]
 reduce trip =
-    let next = reduceOnce trip
-    in if next == trip then trip else reduce next
+    if reduceOnce trip == trip
+    then trip
+    else reduce (reduceOnce trip)
 
 -- performs reduction and returns the final string from unKnot
 unKnotReduce :: [(Char,Char)] -> String
@@ -145,7 +161,6 @@ main = do
    print(t05)
    print("   result:" ++ unKnotReduce t05)
 
-   -- extra test cases used earlier
    let t06 = [('a','o'),('q','u'),('a','u')]
    print("   test case t06 - tripcode: " )
    print(t06)
